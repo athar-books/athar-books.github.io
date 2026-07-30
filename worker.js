@@ -29,7 +29,7 @@
  * The token and key checks are what actually protect the data.
  */
 const ALLOWED = [
-  // "https://YOUR-USERNAME.github.io",
+  "https://athar-books.github.io",
 ];
 
 function cors(request) {
