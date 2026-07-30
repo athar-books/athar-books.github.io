@@ -259,6 +259,9 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
   var KINDS = ["كتاب", "دفتر عمل"];
 
   var K_MINE = "bx:mine", K_HOME = "bx:home", K_ME = "bx:me", K_USER = "bx:user";
+  // uid -> token, kept across sign-out so the same number on the same device
+  // presents the token the server already bound to the account.
+  var K_TOKS = "bx:toks";
   function kOf(kind, code) { return "bx:v2:" + kind + ":" + code; }
   function kPic(id) { return "bx:v2:pic:" + id; }
   // Moderation lists. In production these are two columns in the founders' sheet,
@@ -281,22 +284,39 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
 
   /* ---------------- storage ---------------- */
   var mem = {}, hasStore = !!(window.storage && window.storage.get);
+  // window.storage does not exist in a plain browser. Without a second tier the
+  // identity token is lost on every reload, and because the server binds an
+  // account to the first token it sees, the next sign-in is locked out.
+  var hasLS = (function () {
+    try { localStorage.setItem("bx:probe", "1"); localStorage.removeItem("bx:probe"); return true; }
+    catch (e) { return false; }   // private mode on some browsers, or storage disabled
+  })();
   function load(key, shared) {
-    if (!hasStore) return Promise.resolve(mem[key] === undefined ? null : mem[key]);
-    return window.storage.get(key, shared)
-      .then(function (r) { return r && r.value ? JSON.parse(r.value) : null; })
-      .catch(function () { return mem[key] === undefined ? null : mem[key]; });
+    if (hasStore) {
+      return window.storage.get(key, shared)
+        .then(function (r) { return r && r.value ? JSON.parse(r.value) : null; })
+        .catch(function () { return mem[key] === undefined ? null : mem[key]; });
+    }
+    if (hasLS) {
+      try {
+        var raw = localStorage.getItem(key);
+        return Promise.resolve(raw ? JSON.parse(raw) : null);
+      } catch (e) { /* fall through to memory */ }
+    }
+    return Promise.resolve(mem[key] === undefined ? null : mem[key]);
   }
   function loadList(key) { return load(key, true).then(function (v) { return Array.isArray(v) ? v : []; }); }
   function save(key, val, shared) {
     mem[key] = val;
-    if (!hasStore) return Promise.resolve();
-    return window.storage.set(key, JSON.stringify(val), shared).catch(function () {});
+    if (hasStore) return window.storage.set(key, JSON.stringify(val), shared).catch(function () {});
+    if (hasLS) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
+    return Promise.resolve();
   }
   function drop(key, shared) {
     delete mem[key];
-    if (!hasStore) return Promise.resolve();
-    return window.storage.delete(key, shared).catch(function () {});
+    if (hasStore) return window.storage.delete(key, shared).catch(function () {});
+    if (hasLS) { try { localStorage.removeItem(key); } catch (e) {} }
+    return Promise.resolve();
   }
 
   function waLink(phone, msg) {
@@ -328,7 +348,7 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
   }
 
   /* ---------------- state ---------------- */
-  var picMem = {}, picWanted = {};
+  var picMem = {}, picWanted = {}, toks = {};
   var S = {
     tab: "offers", offers: [], wants: [], mine: [], ready: false, home: null, scope: "village",
     grade: "all", subject: "all", school: "all", showTaken: false,
@@ -390,12 +410,15 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
     }
     var d = normPhone(u.phone);
     if (d.length < 12) { S.authErr = "رقم الهاتف غير صحيح."; return render(); }
-    S.user = {
-      uid: "p:" + d, first: u.first, father: u.father, family: u.family, phone: d,
-      tok: (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2))
-    };
+    // Reuse the token this device already holds for this number. Minting a new
+    // one would be rejected: the server binds an account to its first token and
+    // only «جهاز جديد» in the admin console can release it.
+    var uid = "p:" + d;
+    var tok = toks[uid] || (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
+    toks[uid] = tok;
+    S.user = { uid: uid, first: u.first, father: u.father, family: u.family, phone: d, tok: tok };
     S.authErr = ""; S.draft = null;
-    save(K_USER, S.user, false); render();
+    save(K_TOKS, toks, false); save(K_USER, S.user, false); render();
   }
   function signOut() {
     S.user = null; S.batch = []; S.mine = [];
@@ -914,11 +937,13 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
     });
   }
 
-  Promise.all([load(K_HOME, false), load(K_MINE, false), load(K_ME, false), load(K_USER, false)]).then(function (r) {
+  Promise.all([load(K_HOME, false), load(K_MINE, false), load(K_ME, false), load(K_USER, false),
+               load(K_TOKS, false)]).then(function (r) {
     S.home = (typeof r[0] === "string" && r[0]) ? r[0] : null;
     S.mine = Array.isArray(r[1]) ? r[1] : [];
     if (r[2] && typeof r[2] === "object") S.me = Object.assign(S.me, r[2]);
     if (r[3] && typeof r[3] === "object" && r[3].uid) S.user = r[3];
+    if (r[4] && typeof r[4] === "object") toks = r[4];
     render(); refresh();
   });
 })();
