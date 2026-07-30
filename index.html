@@ -257,6 +257,9 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
   // uid -> token, kept across sign-out so the same number on the same device
   // presents the token the server already bound to the account.
   var K_TOKS = "bx:toks";
+  // uid -> {first, father, family}, so «دخول» can restore the name without
+  // asking for it again. Written at sign-up, kept across sign-out.
+  var K_PROF = "bx:prof";
   function kOf(kind, code) { return "bx:v2:" + kind + ":" + code; }
   function kPic(id) { return "bx:v2:pic:" + id; }
   // Moderation lists. In production these are two columns in the founders' sheet,
@@ -343,8 +346,9 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
   }
 
   /* ---------------- state ---------------- */
-  var picMem = {}, picWanted = {}, toks = {};
+  var picMem = {}, picWanted = {}, toks = {}, profs = {};
   var backTab = "offers";   // where «دخول» was opened from, to return there after
+  var authMode = "in";      // "in" = دخول (phone only), "up" = إنشاء حساب
   var S = {
     tab: "offers", offers: [], wants: [], mine: [], ready: false, home: null, scope: "village",
     grade: "all", subject: "all", school: "all", showTaken: false,
@@ -397,10 +401,20 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
     return d;
   }
 
-  function signIn() {
+  function startSession(uid, prof, tok) {
+    S.user = { uid: uid, first: prof.first, father: prof.father, family: prof.family,
+               phone: uid.slice(2), tok: tok };
+    S.authErr = ""; S.authHelp = false; S.draft = null;
+    if (S.tab === "in") S.tab = backTab;
+    save(K_USER, S.user, false);
+    render(); refresh();   // re-fetch so names and numbers appear for the shelf
+  }
+
+  // إنشاء حساب — full details, once. Mints the token this device will present.
+  function signUp() {
     var g = function (id) { var e = document.getElementById(id); return e ? e.value.trim() : ""; };
     var u = { first: g("iFirst"), father: g("iFather"), family: g("iFamily"), phone: g("iPhone") };
-    S.draft = u;
+    S.draft = u; S.authHelp = false;
     if (u.first.length < 2 || u.father.length < 2 || u.family.length < 2) {
       S.authErr = "اكتب الاسم الثلاثي كامل — اسمك، اسم أبوك، اسم العائلة."; return render();
     }
@@ -411,12 +425,30 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
     // only «جهاز جديد» in the admin console can release it.
     var uid = "p:" + d;
     var tok = toks[uid] || (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
-    toks[uid] = tok;
-    S.user = { uid: uid, first: u.first, father: u.father, family: u.family, phone: d, tok: tok };
-    S.authErr = ""; S.draft = null;
-    if (S.tab === "in") S.tab = backTab;
-    save(K_TOKS, toks, false); save(K_USER, S.user, false);
-    render(); refresh();   // re-fetch so names and numbers appear for the shelf
+    var prof = { first: u.first, father: u.father, family: u.family };
+    toks[uid] = tok; profs[uid] = prof;
+    save(K_TOKS, toks, false); save(K_PROF, profs, false);
+    startSession(uid, prof, tok);
+  }
+
+  // دخول — the number alone. It is not proof of anything: what lets you back in
+  // is the token this device already holds. A number typed on a device that has
+  // never signed up cannot be admitted, or knowing a number would be enough to
+  // take over an account.
+  function signInPhone() {
+    var e = document.getElementById("iPhone");
+    var raw = e ? e.value.trim() : "";
+    S.draft = { first: "", father: "", family: "", phone: raw };
+    S.authHelp = false;
+    var d = normPhone(raw);
+    if (d.length < 12) { S.authErr = "رقم الهاتف غير صحيح."; return render(); }
+    var uid = "p:" + d;
+    if (!toks[uid] || !profs[uid]) {
+      S.authErr = "هذا الرقم مش مسجّل على هذا الجهاز.";
+      S.authHelp = true;
+      return render();
+    }
+    startSession(uid, profs[uid], toks[uid]);
   }
   function signOut() {
     S.user = null; S.batch = []; S.mine = [];
@@ -434,21 +466,41 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
       '<button class="btn big" data-tab="in">دخول</button></div>';
   }
 
-  function authView() {
+  function authView() { return authMode === "up" ? signUpView() : signInView(); }
+
+  function signInView() {
+    var d = S.draft || { phone: "" };
+    return '<div class="card"><h2>دخول</h2>' +
+      '<p class="lead">اكتب رقمك وبترجع لحسابك على هذا الجهاز.</p>' +
+      '<div class="field"><label class="lbl">رقم الهاتف</label>' +
+      '<input id="iPhone" inputmode="tel" value="' + esc(d.phone || "") + '" placeholder="05X-XXXXXXX"></div>' +
+      (S.authErr ? '<div class="err">' + esc(S.authErr) + '</div>' : '') +
+      (S.authHelp
+        ? '<div class="notice">إذا بدّلت تلفون أو مسحت بيانات المتصفّح، لازم نفكّ حسابك عن الجهاز القديم. ' +
+          'تواصل معنا على واتساب ومنرجّعلك حسابك بكتبك.' +
+          '<a class="btn vbtn" href="' + esc(waLink(VERIFY_WA, "بدي أرجّع حسابي — بدّلت تلفون")) +
+          '" target="_blank" rel="noopener noreferrer">تواصل معنا على واتساب</a></div>'
+        : '') +
+      '<button class="btn big" id="doIn">دخول</button>' +
+      '<button class="linkish" id="toUp">ما عندك حساب؟ أنشئ واحد</button></div>';
+  }
+
+  function signUpView() {
     var d = S.draft || { first: "", father: "", family: "", phone: "" };
-    return '<div class="card"><h2>عرّف عن حالك</h2>' +
-      '<p class="lead">التصفّح مفتوح للجميع. بتحتاج تعرّف عن حالك عشان تنشر كتب، وعشان تشوف أسماء وأرقام الباقين.</p>' +
+    return '<div class="card"><h2>إنشاء حساب</h2>' +
+      '<p class="lead">التصفّح مفتوح للجميع. بتحتاج حساب عشان تنشر كتب، وعشان تشوف أسماء وأرقام الباقين.</p>' +
       '<div class="field two">' +
       '<div><label class="lbl">الاسم الأول</label><input id="iFirst" value="' + esc(d.first) + '"></div>' +
       '<div><label class="lbl">اسم الأب</label><input id="iFather" value="' + esc(d.father) + '"></div></div>' +
       '<div class="field"><label class="lbl">اسم العائلة</label><input id="iFamily" value="' + esc(d.family) + '"></div>' +
       '<div class="field"><label class="lbl">رقم الهاتف</label>' +
       '<input id="iPhone" inputmode="tel" value="' + esc(d.phone) + '" placeholder="05X-XXXXXXX">' +
-      '<div class="hint">ما في رسالة تأكيد. الرقم بيربط حسابك بأي جهاز بتفتح منه، وبيوصل الناس فيك على واتساب.</div></div>' +
+      '<div class="hint">ما في رسالة تأكيد. الرقم بيربط حسابك بهذا الجهاز، وبيوصل الناس فيك على واتساب.</div></div>' +
       (S.authErr ? '<div class="err">' + esc(S.authErr) + '</div>' : '') +
       '<div class="notice">اسمك الثلاثي ورقمك بيظهروا للي عرّفوا عن حالهم فقط، مش لكل زائر. ' +
       'إذا الكتب لولدك، عرّف عن حالك انت مش عنه.</div>' +
-      '<button class="btn big" id="doIn">ابدأ</button></div>';
+      '<button class="btn big" id="doUp">أنشئ الحساب</button>' +
+      '<button class="linkish" id="toIn">عندك حساب؟ ادخل</button></div>';
   }
 
   /* ---------------- header ---------------- */
@@ -753,7 +805,12 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
       };
     });
 
-    var di = document.getElementById("doIn"); if (di) di.onclick = signIn;
+    var di = document.getElementById("doIn"); if (di) di.onclick = signInPhone;
+    var du = document.getElementById("doUp"); if (du) du.onclick = signUp;
+    var tu = document.getElementById("toUp");
+    if (tu) tu.onclick = function () { authMode = "up"; S.authErr = ""; S.authHelp = false; render(); };
+    var ti = document.getElementById("toIn");
+    if (ti) ti.onclick = function () { authMode = "in"; S.authErr = ""; S.authHelp = false; render(); };
     var so = document.getElementById("signOut"); if (so) so.onclick = signOut;
 
     var em = document.getElementById("editMe"); if (em) em.onclick = function () { S.editMe = true; render(); };
@@ -952,12 +1009,15 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
   }
 
   Promise.all([load(K_HOME, false), load(K_MINE, false), load(K_ME, false), load(K_USER, false),
-               load(K_TOKS, false)]).then(function (r) {
+               load(K_TOKS, false), load(K_PROF, false)]).then(function (r) {
     S.home = (typeof r[0] === "string" && r[0]) ? r[0] : null;
     S.mine = Array.isArray(r[1]) ? r[1] : [];
     if (r[2] && typeof r[2] === "object") S.me = Object.assign(S.me, r[2]);
     if (r[3] && typeof r[3] === "object" && r[3].uid) S.user = r[3];
     if (r[4] && typeof r[4] === "object") toks = r[4];
+    if (r[5] && typeof r[5] === "object") profs = r[5];
+    // A device that has never created an account has nothing to sign in to.
+    authMode = Object.keys(profs).length ? "in" : "up";
     render(); refresh();
   });
 })();
