@@ -6,4 +6,4 @@ compatibility_date = "2026-07-01"
 # then paste the returned id below.
 [[kv_namespaces]]
 binding = "BOOKS"
-id = "PASTE_KV_NAMESPACE_ID_HERE"
+id = "a2196ef57c31402185f50ee1533f0666"
