@@ -344,6 +344,7 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
 
   /* ---------------- state ---------------- */
   var picMem = {}, picWanted = {}, toks = {};
+  var backTab = "offers";   // where «دخول» was opened from, to return there after
   var S = {
     tab: "offers", offers: [], wants: [], mine: [], ready: false, home: null, scope: "village",
     grade: "all", subject: "all", school: "all", showTaken: false,
@@ -413,12 +414,24 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
     toks[uid] = tok;
     S.user = { uid: uid, first: u.first, father: u.father, family: u.family, phone: d, tok: tok };
     S.authErr = ""; S.draft = null;
-    save(K_TOKS, toks, false); save(K_USER, S.user, false); render();
+    if (S.tab === "in") S.tab = backTab;
+    save(K_TOKS, toks, false); save(K_USER, S.user, false);
+    render(); refresh();   // re-fetch so names and numbers appear for the shelf
   }
   function signOut() {
     S.user = null; S.batch = []; S.mine = [];
+    if (S.tab === "add" || S.tab === "in") S.tab = "offers";
     save(K_USER, null, false); save(K_MINE, [], false);
-    render();
+    render(); refresh();   // drop the names and numbers still held in memory
+  }
+
+  // Shown on «أضف كتب» to a visitor who has not identified themselves. The form
+  // itself lives on its own tab, reached from «دخول» in the header.
+  function needSignIn() {
+    return '<div class="card"><h2>عشان تنشر كتب</h2>' +
+      '<p class="lead">التصفّح مفتوح للجميع. بتحتاج تعرّف عن حالك مرة وحدة عشان تنشر كتب، ' +
+      'تحجز كتاب، أو تشوف أسماء وأرقام الباقين.</p>' +
+      '<button class="btn big" data-tab="in">دخول</button></div>';
   }
 
   function authView() {
@@ -445,7 +458,8 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
       '<p>' + esc(vill(S.home).name) + ' · من الصف الأول حتى الثاني عشر ' +
       '<button class="linkish" id="chgHome">غيّر البلد</button></p></div>' +
       '<div class="tally"><b>' + n + '</b><span>كتاب متوفر الآن</span>' +
-      (S.user ? '<button class="linkish" id="signOut">خروج · ' + esc(S.user.first) + '</button>' : '') +
+      (S.user ? '<button class="linkish" id="signOut">خروج · ' + esc(S.user.first) + '</button>'
+              : '<button class="linkish" data-tab="in">دخول</button>') +
       '</div></header>' +
       '<div class="tabs">' + tabBtn("offers", "كتب متوفرة") + tabBtn("wants", "كتب مطلوبة") +
       tabBtn("add", "أضف كتب") + '</div>';
@@ -526,7 +540,7 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
         h += '<span class="note">محجوز حاليًا</span>';
       }
     } else {
-      if (!S.user) h += '<button class="btn ghost" data-tab="add">عرّف عن حالك لتشوف صاحب الكتاب</button>';
+      if (!S.user) h += '<button class="btn ghost" data-tab="in">عرّف عن حالك لتشوف صاحب الكتاب</button>';
       else if (owned) h += '<span class="note">' + (r.handoff === "point" ? "بـ" + esc(PICKUP) : "متوفر") + '</span>';
       else h += wa + (wa ? "" : '<span class="note">استلام من ' + esc(PICKUP) + '</span>') +
                 (S.tab === "offers" ? A("hold", "احجزه إلي", "") : "");
@@ -652,7 +666,9 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
   function render() {
     if (!S.home) { root.innerHTML = homeView(); bind(); return; }
     root.innerHTML = '<div class="wrap">' + head() +
-      (S.tab === "add" ? (S.user ? addView() : authView()) : filters() + listView()) +
+      (S.tab === "in" ? authView()
+        : S.tab === "add" ? (S.user ? addView() : needSignIn())
+        : filters() + listView()) +
       '<p class="foot">اللي بتكتبه بيظهر لكل من بيفتح الصفحة. لا تنشر رقم تلفون طالب قاصر.' +
       (hasStore ? "" : "<br>الإعلانات محفوظة مؤقتًا فقط — لازم تربط قاعدة بيانات قبل الإطلاق.") +
       '</p></div>';
@@ -708,7 +724,10 @@ select:focus-visible, input:focus-visible { outline: 3px solid var(--green); out
       b.onclick = function () { S.scope = b.dataset.scope; S.ready = false; render(); refresh(); };
     });
     root.querySelectorAll("[data-tab]").forEach(function (b) {
-      b.onclick = function () { S.tab = b.dataset.tab; S.err = ""; render(); };
+      b.onclick = function () {
+        if (b.dataset.tab === "in" && S.tab !== "in") backTab = S.tab;
+        S.tab = b.dataset.tab; S.err = ""; render();
+      };
     });
     root.querySelectorAll("[data-g]").forEach(function (b) {
       b.onclick = function () { S.grade = b.dataset.g; render(); };
