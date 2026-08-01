@@ -522,4 +522,8 @@ export default {
 
     return new Response("not found", { status: 404 });
   },
+  npx wrangler login
+npx wrangler secret put PEPPER      # paste ~30 random chars, SAVE IT, never change
+npx wrangler secret put ADMIN_KEY   # paste different random chars, SAVE IT
+npx wrangler deploy
 };
