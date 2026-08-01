@@ -3,21 +3,32 @@
  * Cloudflare Worker + KV. Holds the listings so everyone sees the same shelf.
  *
  * Endpoints
- *   POST /data      { village, uid?, tok? }        -> shelf. Names and phones
- *                                                    only for identified users.
+ *   POST /data      { village, uid?, tok? }        -> shelf. Names only for
+ *                                                    identified users; phones
+ *                                                    only when the listing
+ *                                                    owner is verified too.
+ *   POST /session   { uid, tok, mode, pass, name? } -> signup / signin / setpass
+ *   POST /admin     { key, act, ... }               -> approve, block,
+ *                                                    resetDevice, resetAccount
  *   POST /publish   { village, kind, uid, tok, records[], pics{} }
  *   POST /update    { village, kind, uid, tok, id, act }
  *   GET  /pic?id=
- *   GET  /webhook   Meta handshake
- *   POST /webhook   incoming WhatsApp -> auto-approve
  *
  * Two rules that matter:
  *   1. The server decides who you are from your token. It never trusts a uid
  *      in the request body for authorization.
  *   2. Anonymous callers get books without names or numbers. Identity is
  *      exchanged for identity.
+ *   3. Publishing is open to any signed-up account. Handing out a phone
+ *      number is not — that waits until a founder approves the account by
+ *      hand through /admin. See view().
  *
- * Secrets: VERIFY_TOKEN, APP_SECRET, ADMIN_KEY.   KV binding: BOOKS
+ * Secrets: ADMIN_KEY, PEPPER.   KV binding: BOOKS
+ *
+ * There is no WhatsApp verification and no webhook. Accounts are approved by
+ * hand by the founders through /admin, and nothing is ever sent to anyone's
+ * number. The wa.me links in the frontend are plain links that open on the
+ * parent's own phone — they do not touch this Worker.
  */
 
 /**
@@ -51,16 +62,52 @@ const json = (d, s = 200) =>
 const HOLD_MS = 48 * 3600 * 1000;
 const MAX_BATCH = 15;
 
+const K_DONE = "stat:done";
+
 const kList = (v, kind) => `list:${kind}:${v}`;
 const kPic = (id) => `pic:${id}`;
 const kTok = (uid) => `tok:${uid}`;
 const kUser = (uid) => `user:${uid}`;
+const kPass = (uid) => `pass:${uid}`;
+// Throttles wrong passwords, keyed by uid.
+const kFail = (uid) => `pfail:${uid}`;
 
-function vCode(uid) {
-  let h = 0;
-  for (let i = 0; i < uid.length; i++) h = (h * 31 + uid.charCodeAt(i)) >>> 0;
-  return h.toString(36).toUpperCase().slice(-4).padStart(4, "0");
+/* ---------------- passwords ----------------
+   PBKDF2-SHA256 over Web Crypto — no dependencies, available in Workers.
+   Per-account random salt, plus a server-side PEPPER secret so a KV dump
+   alone is not enough to attack the hashes offline. 6-character passwords
+   from parents will not survive a fast unsalted hash, which is exactly why
+   this is deliberately slow.
+
+   PEPPER is set with: npx wrangler secret put PEPPER
+   Changing or losing it invalidates every stored password — every account
+   would need an admin resetAccount. Set it once, before real signups.
+   ------------------------------------------------------------------ */
+const PBKDF2_ITER = 100000;
+const MAX_SIGNIN_FAILS = 8;
+
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+async function hashPass(pass, salt, pepper, iter) {
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(pass + (pepper || "")),
+    "PBKDF2", false, ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: iter || PBKDF2_ITER, hash: "SHA-256" },
+    key, 256
+  );
+  return b64(bits);
 }
+/** Constant time, so a wrong password cannot be narrowed down by timing. */
+function sameStr(a, b) {
+  if (a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+
 function normPhone(raw) {
   let d = String(raw || "").replace(/\D/g, "");
   if (!d) return "";
@@ -74,15 +121,19 @@ async function readList(kv, key) {
 }
 
 /**
- * First device to claim an account keeps it. A second device with a different
- * token is refused until the account re-verifies over WhatsApp, which is what
- * stops someone signing in as you just by knowing your number.
+ * The device holding the bound token is the account. Signing in with the right
+ * password rebinds it here. Knowing the number alone gets you nothing.
  */
 async function auth(env, uid, tok) {
   if (!uid || !tok || !uid.startsWith("p:")) return false;
   const held = await env.BOOKS.get(kTok(uid));
-  if (!held) { await env.BOOKS.put(kTok(uid), tok); return true; }
-  return held === tok;
+  if (held) return held === tok;
+  // No device bound yet. Refuse to auto-bind once the account has a password:
+  // otherwise knowing the phone number would be enough to claim the account
+  // without ever presenting the password, and /session would be decorative.
+  if (await env.BOOKS.get(kPass(uid))) return false;
+  await env.BOOKS.put(kTok(uid), tok);
+  return true;
 }
 
 function effStatus(r) {
@@ -91,8 +142,22 @@ function effStatus(r) {
   return r.status || "open";
 }
 
-/** Strip identity for anonymous callers; mark ownership for identified ones. */
-function view(r, uid) {
+/**
+ * Strip identity for anonymous callers; mark ownership for identified ones.
+ *
+ * `ownerOk` is whether the *listing owner's* account has been verified. The
+ * gate on posting was removed so supply is captured at the moment of intent —
+ * a parent who clears a shelf at 9pm should not be told to wait for a phone
+ * call. The gate now sits on contact instead, which is where it belongs: an
+ * unverified account can fill the shelf, but its number is never handed out.
+ * The risk we actually care about — a stranger reaching a number nobody
+ * confirmed — is still covered by the same manual check.
+ *
+ * This is the whole enforcement point. The frontend hiding a button is
+ * convenience; a listing whose owner is unverified simply has no `phone` key
+ * in the response, for every caller including an authenticated one.
+ */
+function view(r, uid, ownerOk) {
   const mine = !!uid && r.uid === uid;
   const held = !!uid && r.holder === uid;
   const out = {
@@ -100,31 +165,18 @@ function view(r, uid) {
     title: r.title, cond: r.cond, school: r.school, handoff: r.handoff,
     pic: !!r.pic, at: r.at, status: effStatus(r),
     confOwner: !!r.confOwner, confHolder: !!r.confHolder,
-    ver: !!r.ver, mine, held,
+    ver: !!ownerOk, sealed: !ownerOk, mine, held,
   };
   if (uid) {
     out.name = r.name || "";
-    out.holderName = r.holderName || "";
-    if (r.handoff === "direct") out.phone = r.phone || "";
+    // Who reserved a book is between those two people. It was previously
+    // returned to everyone signed in, which told the whole village who is
+    // taking what.
+    if (mine || held) out.holderName = r.holderName || "";
+    // Own number always comes back — you cannot leak yourself to yourself.
+    if (r.handoff === "direct" && (ownerOk || mine)) out.phone = r.phone || "";
   }
   return out;
-}
-
-async function signatureValid(request, raw, appSecret) {
-  const header = request.headers.get("x-hub-signature-256");
-  if (!header || !header.startsWith("sha256=")) return false;
-  const key = await crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(appSecret),
-    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
-  );
-  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw));
-  const hex = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  const a = new TextEncoder().encode(header.slice(7));
-  const b = new TextEncoder().encode(hex);
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
-  return diff === 0;
 }
 
 export default {
@@ -143,20 +195,115 @@ export default {
       const ok = b.uid && b.tok ? await auth(env, b.uid, b.tok) : false;
       const uid = ok ? b.uid : null;
 
-      const [offers, wants, approved, blocked] = await Promise.all([
+      const [offers, wants, approved, blocked, doneRaw] = await Promise.all([
         readList(env.BOOKS, kList(village, "offers")),
         readList(env.BOOKS, kList(village, "wants")),
         readList(env.BOOKS, "approved"),
         readList(env.BOOKS, "blocked"),
+        env.BOOKS.get(K_DONE),
       ]);
       const live = (arr) => arr.filter((r) => !blocked.includes(r.uid))
-        .map((r) => view({ ...r, ver: approved.includes(r.uid) }, uid));
+        .map((r) => view(r, uid, approved.includes(r.uid)));
 
       return json({
         offers: live(offers), wants: live(wants),
         me: uid ? { verified: approved.includes(uid), blocked: false } : null,
+        done: parseInt(doneRaw, 10) || 0,
         authFailed: !!(b.uid && b.tok && !ok),
       });
+    }
+
+    /* ---------------- sessions ----------------
+       Signup, sign-in, WhatsApp recovery and setting a password.
+
+       A password does one job here: it lets a person move to a new phone
+       without a founder running resetDevice by hand. Signing in rebinds the
+       account to whichever device presents the right password, replacing the
+       old first-token-wins rule.
+
+       There is no self-serve recovery. If someone forgets their password, a
+       founder clears the account with the admin `resetAccount` action after
+       speaking to them, and they sign up again on the same number. Nothing is
+       ever sent to anyone's phone.
+       ------------------------------------------------------------------ */
+    if (p === "/session" && request.method === "POST") {
+      const b = await request.json().catch(() => ({}));
+      const uid = String(b.uid || "");
+      const tok = String(b.tok || "");
+      if (!uid.startsWith("p:") || uid.length < 5 || !tok) return json({ error: "bad" }, 400);
+
+      const blocked = await readList(env.BOOKS, "blocked");
+      if (blocked.includes(uid)) return json({ error: "blocked" }, 403);
+
+      const mode = String(b.mode || "");
+      const stored = await env.BOOKS.get(kPass(uid));
+      const userOf = async () => (await env.BOOKS.get(kUser(uid), "json")) || {};
+      const putPass = async (pass) => {
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        await env.BOOKS.put(kPass(uid), JSON.stringify({
+          s: b64(salt), h: await hashPass(pass, salt, env.PEPPER, PBKDF2_ITER), i: PBKDF2_ITER,
+        }));
+      };
+
+      // No mode = the recovery poll. "Has my pending token gone live yet?"
+      if (!mode) {
+        const held = await env.BOOKS.get(kTok(uid));
+        if (held && sameStr(held, tok)) {
+          const u = await userOf();
+          return json({ ok: true, name: u.name || "", noPass: !stored });
+        }
+        return json({ ok: false });
+      }
+
+      if (mode === "signup") {
+        if (stored) return json({ exists: true });
+        const name = String(b.name || "").replace(/\s+/g, " ").trim().slice(0, 80);
+        if (name.length < 5 || name.split(" ").filter(Boolean).length < 2) return json({ needName: true });
+        const pass = String(b.pass || "");
+        if (pass.length < 6) return json({ weakPass: true });
+        // Re-claim: an account with a record but no password has been cleared
+        // by a founder for someone who forgot theirs. Keep the stored name and
+        // the listings; only the password and device are new.
+        const prior = await env.BOOKS.get(kUser(uid), "json");
+        await putPass(pass);
+        await env.BOOKS.put(kTok(uid), tok);
+        await env.BOOKS.put(kUser(uid), JSON.stringify(prior
+          ? { ...prior, name: prior.name || name }
+          : { name, phone: uid.slice(2), village: String(b.village || "").slice(0, 24), at: Date.now() }));
+        return json({ ok: true, name: (prior && prior.name) || name });
+      }
+
+      if (mode === "signin") {
+        // No password set: either no account at all, or one a founder cleared.
+        // Both are handled by signing up again on the same number.
+        if (!stored) return json({ noAccount: true });
+        const fails = parseInt(await env.BOOKS.get(kFail(uid)), 10) || 0;
+        if (fails >= MAX_SIGNIN_FAILS) return json({ badPass: true, locked: true });
+        const rec = JSON.parse(stored);
+        const got = await hashPass(String(b.pass || ""), unb64(rec.s), env.PEPPER, rec.i);
+        if (!sameStr(got, rec.h)) {
+          // Throttled, not permanent: a parent who forgets is not locked out
+          // for good, but guessing is bounded. Expires with the key.
+          await env.BOOKS.put(kFail(uid), String(fails + 1), { expirationTtl: 900 });
+          return json({ badPass: true });
+        }
+        await env.BOOKS.delete(kFail(uid));
+        await env.BOOKS.put(kTok(uid), tok);   // the password moved the account here
+        const u = await userOf();
+        return json({ ok: true, name: u.name || "" });
+      }
+
+      if (mode === "setpass") {
+        const held = await env.BOOKS.get(kTok(uid));
+        if (!held || !sameStr(held, tok)) return json({ error: "auth" }, 401);
+        const pass = String(b.pass || "");
+        if (pass.length < 6) return json({ weakPass: true });
+        await putPass(pass);
+        await env.BOOKS.delete(kFail(uid));
+        return json({ ok: true });
+      }
+
+      return json({ error: "mode" }, 400);
     }
 
     /* ---------------- publish a batch ---------------- */
@@ -232,6 +379,12 @@ export default {
         if (r.pic) await env.BOOKS.delete(kPic(r.id));
       } else if (act === "hold") {
         if (owner || st !== "open") return json({ error: "unavailable" }, 409);
+        // Reserving is the step that hands over a phone number. There is
+        // nothing to hand over yet if the owner has not been verified, and
+        // letting the book be locked for 48h on a contact nobody can use
+        // takes it off the shelf for no reason.
+        const approved = await readList(env.BOOKS, "approved");
+        if (!approved.includes(r.uid)) return json({ error: "unverified" }, 409);
         r.status = "reserved"; r.resAt = Date.now();
         r.holder = b.uid; r.holderName = String(b.name || "").slice(0, 80);
         r.confOwner = false; r.confHolder = false;
@@ -244,6 +397,14 @@ export default {
         r.confHolder = true;
       } else if (act === "okOwner") {
         if (!owner) return json({ error: "forbidden" }, 403);
+        // Count the exchange once. `st` is the status before this call, so a
+        // second okOwner on an already-done listing does not inflate the tally.
+        // Read-modify-write is not atomic; at village volume a lost increment
+        // is an undercount of a vanity number, which is the acceptable failure.
+        if (st !== "done") {
+          const n = parseInt(await env.BOOKS.get(K_DONE), 10) || 0;
+          await env.BOOKS.put(K_DONE, String(n + 1));
+        }
         r.confOwner = true; r.status = "done"; r.doneAt = Date.now();
       } else {
         return json({ error: "act" }, 400);
@@ -259,44 +420,6 @@ export default {
       const v = await env.BOOKS.get(kPic(id));
       if (!v) return json({ error: "none" }, 404);
       return json({ id, value: v });
-    }
-
-    /* ---------------- WhatsApp verification ---------------- */
-    if (p === "/webhook" && request.method === "GET") {
-      const ok = url.searchParams.get("hub.mode") === "subscribe" &&
-                 url.searchParams.get("hub.verify_token") === env.VERIFY_TOKEN;
-      return ok
-        ? new Response(url.searchParams.get("hub.challenge"), { status: 200 })
-        : new Response("forbidden", { status: 403 });
-    }
-
-    if (p === "/webhook" && request.method === "POST") {
-      const raw = await request.text();
-      if (!(await signatureValid(request, raw, env.APP_SECRET)))
-        return new Response("bad signature", { status: 401 });
-
-      let body; try { body = JSON.parse(raw); } catch { return new Response("ok"); }
-      const messages = body?.entry?.[0]?.changes?.[0]?.value?.messages || [];
-
-      for (const m of messages) {
-        if (m.type !== "text") continue;
-        const phone = normPhone(m.from);              // Meta fills this, not the sender
-        if (!phone) continue;
-        const uid = "p:" + phone;
-        const sent = String(m.text?.body || "").toUpperCase().match(/\b[0-9A-Z]{4}\b/g) || [];
-        if (!sent.includes(vCode(uid))) {
-          await env.BOOKS.put("fail:" + phone, JSON.stringify({ at: Date.now() }), { expirationTtl: 604800 });
-          continue;
-        }
-        const blocked = await readList(env.BOOKS, "blocked");
-        if (blocked.includes(uid)) continue;
-        const approved = await readList(env.BOOKS, "approved");
-        if (!approved.includes(uid)) {
-          approved.push(uid);
-          await env.BOOKS.put("approved", JSON.stringify(approved));
-        }
-      }
-      return new Response("ok", { status: 200 });   // always 200 or Meta disables the hook
     }
 
     /* ---------------- admin ----------------
@@ -350,6 +473,18 @@ export default {
       // Frees the account so the person can sign in again on a new phone.
       if (b.act === "resetDevice") {
         await env.BOOKS.delete(kTok(b.uid));
+        return json({ ok: true });
+      }
+
+      // Forgot-password reset. There is no self-serve recovery on purpose —
+      // nothing is sent to anyone's phone. A founder speaks to the person,
+      // clears the account here, and they sign up again on the same number.
+      // Their name, listings and approved status all survive; only the
+      // password and the bound device are new.
+      if (b.act === "resetAccount") {
+        await env.BOOKS.delete(kPass(b.uid));
+        await env.BOOKS.delete(kTok(b.uid));
+        await env.BOOKS.delete(kFail(b.uid));
         return json({ ok: true });
       }
 
