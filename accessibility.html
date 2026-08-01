@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>إتاحة الوصول — أثر</title>
+<meta name="description" content="بيان إتاحة الوصول لموقع أثر لتبادل الكتب المدرسية.">
+<meta name="theme-color" content="#2C7A34">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@700;900&family=Tajawal:wght@400;500;700&display=swap');
+:root {
+  --green-d: #2C7A34; --mint: #E4F1E4; --paper: #F4F5F1; --dot: #C6DFC6;
+  --ink: #22372A; --soft: #566B54; --line: #D8E0D5;
+}
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: 'Tajawal', system-ui, sans-serif;
+  font-size: 16px; line-height: 1.7; color: var(--ink);
+  background-color: var(--paper);
+  background-image: radial-gradient(var(--dot) 1.4px, transparent 1.4px);
+  background-size: 18px 18px;
+  min-height: 100vh; padding-bottom: 48px;
+  -webkit-font-smoothing: antialiased;
+}
+*, *::before, *::after { box-sizing: border-box; }
+.wrap { max-width: 700px; margin: 0 auto; padding: 0 16px; }
+header { padding: 22px 0 16px; }
+.brand { font-family: 'Cairo', sans-serif; font-weight: 900; font-size: 21px; color: var(--green-d); display: block; }
+h1 { font-family: 'Cairo', sans-serif; font-weight: 700; font-size: clamp(25px, 6vw, 34px); line-height: 1.4; margin: 4px 0 0; }
+.card { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 20px; margin-bottom: 14px; }
+h2 { font-family: 'Cairo', sans-serif; font-size: 20px; line-height: 1.4; margin: 0 0 10px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-inline-start: 22px; }
+li { margin-bottom: 7px; }
+a { color: var(--green-d); text-underline-offset: 3px; }
+a:focus-visible { outline: 3px solid var(--green-d); outline-offset: 2px; border-radius: 6px; }
+.he { direction: ltr; text-align: start; font-size: 14.5px; color: var(--soft); }
+.foot { font-size: 13px; color: var(--soft); text-align: center; line-height: 1.7; }
+.back { display: inline-block; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <span class="brand">أثر</span>
+  <h1>إتاحة الوصول</h1>
+</header>
+
+<div class="card">
+  <p>
+    أثر مبادرة طلابية تطوعية لتبادل الكتب المدرسية المستعملة في بعينة نجيدات.
+    بدنا الموقع يكون سهل على كل حدا — على الأهل اللي بيفتحوه من التلفون، وعلى اللي
+    بيستعملوا برامج قراءة الشاشة أو بيكبّروا الخط.
+  </p>
+  <p>
+    هاي الصفحة بتحكي بصراحة شو عملنا، وشو لسا ناقص.
+  </p>
+</div>
+
+<div class="card">
+  <h2>شو عملنا</h2>
+  <ul>
+    <li>الصفحة كلها بالعربية ومن اليمين لليسار، والاتجاه محدّد على مستوى المستند كله.</li>
+    <li>حجم الخط الأساسي 16 بكسل على الأقل، وحقول التعبئة كمان 16 بكسل حتى ما يزوّم التلفون لحاله.</li>
+    <li>تباعد الأسطر 1.7 للنص العادي — العربية بتحتاج مساحة أكتر من اللاتينية.</li>
+    <li>ما في تباعد بين الحروف، لأنه بيكسر وصل الحروف العربية.</li>
+    <li>كل زر وحقل بيبيّن إطار واضح لما توصله بزر Tab.</li>
+    <li>كل حقل إله عنوان مكتوب فوقه، مش بس نص باهت جوّاته.</li>
+    <li>كل صورة غلاف إلها وصف نصي.</li>
+    <li>ما في زر أصغر من 24 بكسل، ومعظم الأزرار 44 بكسل وأكتر. ألوان النص متباينة عن الخلفية حسب معيار WCAG 2.1 AA.</li>
+    <li>إذا كنت مشغّل «تقليل الحركة» بجهازك، بنوقّف الحركات.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h2>شو لسا ناقص</h2>
+  <p>
+    ما عملنا فحص إتاحة كامل مع مستخدمين حقيقيين لبرامج قراءة الشاشة. بنعرف إنه في
+    أماكن ممكن تكون أصعب من اللازم:
+  </p>
+  <ul>
+    <li>صف الصفوف (1–12) بيتزحلق أفقيًا، وممكن يكون تنقّله بالكيبورد مش مريح.</li>
+    <li>لما تتغيّر نتائج البحث، ما بنعلن التغيير صوتيًا لبرامج قراءة الشاشة.</li>
+    <li>ما فحصنا الموقع على كل برامج قراءة الشاشة ولا على كل المتصفّحات.</li>
+    <li>أسماء الكتب اللي بتنكتب بالعبري بتظهر متل ما كتبها صاحب الكتاب.</li>
+  </ul>
+  <p>
+    هاي مبادرة صغيرة بتتطوّر مع الوقت، ومنشتغل على النواقص لما نقدر.
+  </p>
+</div>
+
+<div class="card">
+  <h2>إذا واجهت مشكلة</h2>
+  <p>
+    إذا في إشي بالموقع صعب عليك أو مش شغّال متل ما لازم، احكيلنا وبنحاول نصلّحه.
+    خبّرنا شو الصفحة، وشو كنت عم تحاول تعمل، وشو الجهاز أو البرنامج اللي بتستعمله.
+  </p>
+  <p>
+    <!-- TODO before launch: put a real address here, one a founder actually monitors. -->
+    البريد الإلكتروني: <a href="mailto:REPLACE_ME@example.com">REPLACE_ME@example.com</a>
+  </p>
+  <p class="he">
+    הצהרת נגישות — אתר זה הוא יוזמה התנדבותית של תלמידים, ללא הכנסות. אנו שואפים
+    לעמוד בתקן ישראלי 5568 ברמה AA. לפניות בנושא נגישות ניתן לפנות לכתובת שלמעלה.
+  </p>
+</div>
+
+<p class="foot">
+  <a class="back" href="index.html">رجوع للكتب</a>
+</p>
+</div>
+</body>
+</html>
