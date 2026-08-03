@@ -1,0 +1,17 @@
+# Rename this file to .gitignore
+
+# Never commit the admin console — it is local-only
+admin.html
+
+# Secrets
+.dev.vars
+.env
+*.local
+
+# Wrangler
+.wrangler/
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
