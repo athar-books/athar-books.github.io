@@ -1,9 +1,0 @@
-name = "athar-books"
-main = "worker.js"
-compatibility_date = "2026-07-01"
-
-# Create the namespace first:  npx wrangler kv namespace create BOOKS
-# then paste the returned id below.
-[[kv_namespaces]]
-binding = "BOOKS"
-id = "a2196ef57c31402185f50ee1533f0666"
