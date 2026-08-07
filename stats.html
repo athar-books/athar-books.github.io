@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>أثر — إحصائيات</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=Tajawal:wght@300;400;500;700&family=Space+Mono:wght@700&display=swap');
+
+:root {
+  --green-d: #1E5636;
+  --green:   #2E7D4F;
+  --stone:   #6E5F51;
+  --paper:   #EDE7DF;
+  --ink:     #2A3628;
+  --clay:    #B5562E;
+  --line:    #D9D0C5;
+  --wash:    rgba(46, 125, 79, .10);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: 'Tajawal', system-ui, sans-serif;
+  background: var(--paper);
+  background-image: radial-gradient(#DED4C4 1.4px, transparent 1.4px);
+  background-size: 18px 18px;
+  color: var(--ink);
+  line-height: 1.7;
+  min-height: 100vh;
+}
+.wrap { max-width: 920px; margin: 0 auto; padding: 28px 20px 60px; }
+h1 {
+  font-family: 'Cairo', sans-serif; font-weight: 900; color: var(--green-d);
+  font-size: 22px; margin: 0 0 2px;
+}
+.sub { color: var(--stone); font-size: 13.5px; margin: 0 0 26px; }
+
+.gate {
+  background: #fff; border: 1.5px solid var(--line); border-radius: 16px;
+  padding: 28px 24px; max-width: 340px; margin: 70px auto 0; text-align: center;
+}
+.gate p { color: var(--stone); font-size: 13.5px; margin: 0 0 16px; }
+.gate input {
+  width: 100%; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 10px;
+  font-size: 16px; font-family: inherit; text-align: center; margin-bottom: 10px;
+}
+.gate input:focus { outline: none; border-color: var(--green); }
+.btn {
+  background: var(--green); color: #fff; border: none; border-radius: 10px;
+  padding: 12px 18px; font-family: 'Cairo', sans-serif; font-weight: 700;
+  font-size: 15px; cursor: pointer; width: 100%;
+}
+.btn:hover { background: var(--green-d); }
+.gateErr { color: var(--clay); font-size: 13px; margin-top: 10px; }
+
+.grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px; margin-bottom: 26px;
+}
+.stat { background: #fff; border: 1.5px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.stat b {
+  display: block; font-family: 'Space Mono', monospace; font-size: 26px;
+  color: var(--green-d); line-height: 1.3;
+}
+.stat span { font-size: 12.5px; color: var(--stone); }
+
+.section {
+  background: #fff; border: 1.5px solid var(--line); border-radius: 14px;
+  padding: 16px 18px; margin-bottom: 14px;
+}
+.section h2 {
+  font-family: 'Cairo', sans-serif; font-weight: 700; font-size: 14px;
+  color: var(--green-d); margin: 0 0 10px;
+}
+.spark { display: block; width: 100%; height: 40px; }
+.tblWrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+th { color: var(--stone); font-weight: 600; font-size: 12px; }
+td:first-child, th:first-child { position: sticky; right: 0; background: #fff; }
+
+.status { color: var(--stone); font-size: 14px; text-align: center; padding: 40px 20px; }
+.status.errText { color: var(--clay); }
+.refreshBtn {
+  background: none; border: 1.5px solid var(--line); border-radius: 8px;
+  color: var(--stone); font-family: inherit; font-size: 12.5px; padding: 6px 12px;
+  cursor: pointer; margin-bottom: 18px;
+}
+.refreshBtn:hover { border-color: var(--green); color: var(--green-d); }
+</style>
+</head>
+<body>
+<div class="wrap" id="root"></div>
+
+<script>
+(function () {
+  // Same Worker as the main site. Change here if the deployment moves.
+  var API = "https://athar-books.athar-kutub.workers.dev";
+  var KEY_STORAGE = "athar_admin_key";
+
+  // Order here controls the order everything renders in.
+  var EVENTS = ["signup", "shelfLoad", "publish", "verification", "reservation", "exchange"];
+  var EVENT_LABELS = {
+    signup: "حسابات جديدة", shelfLoad: "زيارات للموقع", publish: "إعلانات منشورة",
+    verification: "تحقق عبر واتساب", reservation: "حجوزات", exchange: "تبادلات مكتملة",
+  };
+  var VILLAGES = [
+    ["buaine", "البعينة نجيدات"], ["turan", "طرعان"], ["eilabun", "عيلبون"], ["kanna", "كفر كنا"],
+    ["arraba", "عرابة"], ["sakhnin", "سخنين"], ["deirhanna", "دير حنا"],
+  ];
+
+  var root = document.getElementById("root");
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function gateView(err) {
+    return '<h1>أثر — إحصائيات</h1><p class="sub">للفريق فقط</p>' +
+      '<div class="gate"><p>اكتب مفتاحك عشان تشوف الأرقام.</p>' +
+      '<input id="k" type="password" placeholder="مفتاحك" autofocus>' +
+      '<button class="btn" id="go">ادخل</button>' +
+      (err ? '<div class="gateErr">مفتاح غلط.</div>' : '') +
+      '</div>';
+  }
+
+  // A quiet 30-day bar sparkline, hand-drawn in SVG rather than pulling in
+  // a charting library for six small graphs — same spirit as the progress
+  // ring on the main site.
+  function sparkline(values) {
+    var v = values || [];
+    var max = Math.max.apply(null, v.concat([1]));
+    var w = 600, h = 40, n = Math.max(v.length, 1), gap = 2;
+    var bw = (w - gap * (n - 1)) / n;
+    var bars = v.map(function (val, i) {
+      var bh = Math.max(1.5, (val / max) * (h - 2));
+      var x = i * (bw + gap);
+      return '<rect x="' + x.toFixed(1) + '" y="' + (h - bh).toFixed(1) + '" width="' + bw.toFixed(1) +
+        '" height="' + bh.toFixed(1) + '" rx="1.5" style="fill:var(--green);opacity:' + (val ? 1 : .22) + '"><title>' +
+        val + '</title></rect>';
+    }).join("");
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" class="spark">' + bars + '</svg>';
+  }
+
+  function dashboard(d) {
+    var h = '<h1>أثر — إحصائيات</h1><p class="sub">آخر 30 يوم · محدثة الآن</p>' +
+      '<button class="refreshBtn" id="refresh">تحديث</button>';
+
+    h += '<div class="grid">';
+    EVENTS.forEach(function (ev) {
+      h += '<div class="stat"><b>' + esc(d.totals[ev] || 0) + '</b><span>' + EVENT_LABELS[ev] + '</span></div>';
+    });
+    h += '<div class="stat"><b>' + esc(d.doneAllTime || 0) + '</b><span>مجموع التبادلات على الإطلاق</span></div>';
+    h += '</div>';
+
+    EVENTS.forEach(function (ev) {
+      h += '<div class="section"><h2>' + EVENT_LABELS[ev] + '</h2>' + sparkline(d.daily && d.daily[ev]) + '</div>';
+    });
+
+    var villEvents = Object.keys(d.byVillage || {});
+    if (villEvents.length) {
+      h += '<div class="section"><h2>حسب البلد</h2><div class="tblWrap"><table><thead><tr><th>البلد</th>';
+      villEvents.forEach(function (ev) { h += '<th>' + EVENT_LABELS[ev] + '</th>'; });
+      h += '</tr></thead><tbody>';
+      VILLAGES.forEach(function (v) {
+        h += '<tr><td>' + v[1] + '</td>';
+        villEvents.forEach(function (ev) {
+          h += '<td>' + esc((d.byVillage[ev] && d.byVillage[ev][v[0]]) || 0) + '</td>';
+        });
+        h += '</tr>';
+      });
+      h += '</tbody></table></div></div>';
+    }
+    return h;
+  }
+
+  function load(key) {
+    root.innerHTML = '<h1>أثر — إحصائيات</h1><p class="status">جاري التحميل…</p>';
+    fetch(API + "/admin", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: key, act: "stats" }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.error) {
+          sessionStorage.removeItem(KEY_STORAGE);
+          root.innerHTML = gateView(true);
+          bind();
+          return;
+        }
+        root.innerHTML = dashboard(d);
+        var rf = document.getElementById("refresh");
+        if (rf) rf.onclick = function () { load(key); };
+      })
+      .catch(function () {
+        root.innerHTML = '<h1>أثر — إحصائيات</h1><p class="status errText">ما قدرنا نوصل للخادم. جرّب كمان مرة.</p>';
+      });
+  }
+
+  function bind() {
+    var go = document.getElementById("go");
+    var k = document.getElementById("k");
+    if (go) go.onclick = function () {
+      var v = k.value.trim();
+      if (!v) return;
+      sessionStorage.setItem(KEY_STORAGE, v);
+      load(v);
+    };
+    if (k) k.addEventListener("keydown", function (e) { if (e.key === "Enter" && go) go.click(); });
+  }
+
+  var saved = sessionStorage.getItem(KEY_STORAGE);
+  if (saved) load(saved);
+  else { root.innerHTML = gateView(false); bind(); }
+})();
+</script>
+</body>
+</html>
