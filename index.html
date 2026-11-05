@@ -2782,3 +2782,118 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { border-color
 
 </body>
 </html>
+
+// =====================================================================
+// Athar — moderation messages  (frontend, paste into index.html <script>)
+// In your post submit / edit handler:
+//   button.disabled = true; button.textContent = MOD_MSG.checking;
+//   const data = await <your request to create/edit post>;
+//   if (data.error === 'rejected') { showError(modMessage(data.reason)); return; }   // form stays filled
+//   showToast(data.post?.visible ? MOD_MSG.published : MOD_MSG.queued);             // ADAPT field
+// =====================================================================
+
+// Arabic copy — placeholders, rewrite in your voice.
+const MOD_MSG = {
+  checking: 'جارٍ فحص المنشور...',
+  published: 'تم نشر الكتاب.',
+  queued: 'تم استلام المنشور، سيظهر بعد المراجعة.',
+  reasons: {
+    contact: 'احذف رقم الهاتف أو الروابط من المنشور. التواصل يتم عبر زر واتساب في أثر.',
+    sexual: 'المنشور يحتوي على محتوى غير لائق.',
+    violence: 'المنشور يحتوي على محتوى عنيف.',
+    insult: 'المنشور يحتوي على كلمات مسيئة.',
+    bullying: 'لا يُسمح بذكر أشخاص بطريقة مسيئة.',
+    not_school_item: 'أثر مخصص للكتب والقرطاسية فقط.',
+    spam: 'المنشور غير واضح أو الصورة لا تطابق الكتاب.',
+    drugs: 'المنشور يحتوي على محتوى غير مسموح.',
+  },
+  generic: 'لا يمكن نشر هذا المنشور. عدّل النص أو الصورة وحاول مرة أخرى.',
+};
+
+const modMessage = reason => MOD_MSG.reasons[reason] || MOD_MSG.generic;
+
+
+
+// =====================================================================
+// Athar — reservation hold UI  (frontend, paste into index.html <script>)
+// Reserve -> toast "contact within 24h". On the user's own reserved books,
+// holdBadge(post) shows time left + the contact button until he contacts.
+// =====================================================================
+
+// ADAPT: replace with your existing authenticated request helper.
+async function holdApi(path, body) {
+  const res = await fetch(WORKER_URL + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + localStorage.getItem('token') },
+    body: JSON.stringify(body),
+  });
+  return res.json().catch(() => ({ ok: false, error: 'network' }));
+}
+
+// ADAPT: your existing functions / state.
+const holdToast = msg => alert(msg);           // replace with your toast
+const holdRefresh = () => loadPosts();         // replace with your re-render
+const holdMe = () => currentUser && currentUser.email;   // signed-in user's email
+
+// Arabic copy — placeholders, rewrite in your voice.
+const HOLD_MSG = {
+  reservedHold: 'تم الحجز. تواصل مع صاحب الكتاب خلال 24 ساعة وإلا يُلغى الحجز.',
+  reservedDirect: 'تم الحجز. تابع مع صاحب الكتاب على واتساب.',
+  left: t => `متبقي ${t} للتواصل`,
+  hours: h => `${h} ساعة`,
+  minutes: m => `${m} دقيقة`,
+  contact: 'تواصل عبر واتساب',
+  confirmLeft: t => `أكّد التبادل خلال ${t}، وإلا يعود الكتاب للعرض`,
+  waitingContact: 'محجوز، بانتظار تواصل الطالب',
+  daily_limit: 'وصلت إلى الحد الأقصى: 10 حجوزات خلال 24 ساعة.',
+  expired: 'انتهت مدة الحجز وعاد الكتاب للعرض.',
+  own_post: 'لا يمكنك حجز كتابك.',
+  taken: 'هذا الكتاب محجوز.',
+  not_yours: 'هذا الحجز لم يعد لك.',
+  generic: 'حدث خطأ، حاول مرة أخرى.',
+};
+
+async function reserveBook(postId) {
+  const data = await holdApi('/api/reserve', { postId });
+  if (!data.ok) { holdToast(HOLD_MSG[data.error] || HOLD_MSG.generic); return; }
+  holdToast(data.contacted ? HOLD_MSG.reservedDirect : HOLD_MSG.reservedHold);
+  holdRefresh();
+}
+
+// Use this for EVERY "contact owner" button.
+async function contactOwner(postId, btn) {
+  if (btn) btn.disabled = true;
+  const data = await holdApi('/api/contact', { postId });
+  if (!data.ok) {
+    if (btn) btn.disabled = false;
+    holdToast(HOLD_MSG[data.error] || HOLD_MSG.generic);
+    holdRefresh();
+    return;
+  }
+  location.href = data.link;   // same-tab navigation: not blocked like window.open after await
+}
+
+// Call inside your post-card template. Returns '' for anyone except the
+// reserver of a not-yet-contacted book.
+function holdBadge(post) {
+  if (post.status !== 'reserved' || post.reservedBy !== holdMe()) return '';
+  const btn = `<button onclick="contactOwner('${post.id}', this)" style="background:#25d366;color:#fff;border:0;border-radius:10px;padding:10px 14px;font-weight:bold">${HOLD_MSG.contact}</button>`;   // ADAPT: post.id
+  if (post.contactedAt || !post.holdUntil) return btn;
+  return `<div dir="rtl" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span style="color:#b26a00;font-weight:bold">${HOLD_MSG.left(holdFmt(post.holdUntil))}</span>${btn}</div>`;
+}
+
+// Call inside the OWNER's card ("my posts"), next to your existing confirm button.
+const HOLD_EXCHANGE_MS = 48 * 3600e3;          // keep equal to HOLD.EXCHANGE_MS in the Worker
+function exchangeBadge(post) {
+  if (post.status !== 'reserved' || post.ownerEmail !== holdMe()) return '';   // ADAPT: owner field
+  if (!post.contactedAt) return `<span style="color:#777">${HOLD_MSG.waitingContact}</span>`;
+  const t = holdFmt(Number(post.reservedAt) + HOLD_EXCHANGE_MS);
+  return `<span dir="rtl" style="color:#b26a00;font-weight:bold">${HOLD_MSG.confirmLeft(t)}</span>`;
+}
+
+function holdFmt(deadline) {
+  const ms = Math.max(0, deadline - Date.now());
+  return ms >= 3600e3 ? HOLD_MSG.hours(Math.floor(ms / 3600e3)) : HOLD_MSG.minutes(Math.max(1, Math.ceil(ms / 60e3)));
+}
+
